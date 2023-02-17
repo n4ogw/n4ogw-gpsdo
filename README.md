@@ -160,6 +160,6 @@ of CLC8 as the reset source. The timer interrupt function is
 
 ####2x16 LCD
 
-2z16 LCD library adopted from
+2x16 LCD library adopted from
 
 [https://github.com/eziya/PIC18F_HD44780](https://github.com/eziya/PIC18F_HD44780)

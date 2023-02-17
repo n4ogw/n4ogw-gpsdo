@@ -1,0 +1,3 @@
+(sym_lib_table
+  (lib (name "gpsdo")(type "KiCad")(uri "/home/tclay/misc/radio/gps-freq-ref/kicad/gpsdo.kicad_sym")(options "")(descr ""))
+)

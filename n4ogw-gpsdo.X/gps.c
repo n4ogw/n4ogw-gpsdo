@@ -35,6 +35,8 @@ extern uint8_t venusSurveyCnt[8];
 // configure gps
 
 void gpsConfig(void) {
+    // delay to allow gps to start up
+    __delay_ms(3000);
     gpsExtraOff();
 }
 

@@ -3,8 +3,8 @@
 
  R. Torsten Clay N4OGW
   
- version 23 for board version 2
- 02/14/2023
+ for board version 2
+ 02/25/2023
 
   1. Counts 10 MHz directly using PIC SMT
   2. Divides 10 MHz down to 1 MHz; measures phase difference between 1 MHz and
@@ -131,12 +131,13 @@ volatile bool ADCFlag = false; // set true every time ADC reads TIC
 volatile bool SMTFlag = false;
 
 #ifdef VENUS838T
-uint8_t venusMode;
-uint8_t venusSurveyCnt[8];
+extern uint8_t venusElevMask;
+extern uint8_t venusMode;
+extern uint8_t venusSurveyCnt[8];
 #endif
 
 float quantErr;
-bool quantErrFlag = true; // correct for gps time quantization error if available
+bool quantErrFlag; // correct for gps time quantization error if available
 int lockPPSlimit = 200; // if TIC filtered for PPS within +- this for lockPSfactor * timeConst = PPSlocked
 // ~ 100 per 1000 of ADC range
 int lockPPSfactor = 5; // see above
@@ -216,6 +217,7 @@ void main(void) {
     // Disable the Global Interrupts
     //INTERRUPT_GlobalInterruptDisable();
 
+    __delay_ms(1000);
     setup();
     counterSetup();
     lcdSetup();
@@ -636,6 +638,9 @@ void getCommand(void) {
         t = 't', T = 'T', // time const (followed by new value)
         u = 'u', U = 'U', // set TIC linearization parameters cube (enter value*100))
         w = 'w', W = 'W', // set warmup time (to allow for warm up of oscillator)
+#ifdef VENUS838T
+        x = 'x', X = 'X'  // set GPS elevation mask
+#endif        
     };
 
     //process if something is there
@@ -798,6 +803,7 @@ void getCommand(void) {
                         } else {
                             printf(" off\r\n");
                         }
+                        printf("  elevation mask: %2d deg\r\n", venusElevMask);
 #endif
                         printf("\r\n");
                         printHeader3_ToSerial();
@@ -809,6 +815,10 @@ void getCommand(void) {
                         printf("totalTime3h = ");
                         z = (DATAEE_ReadByte(993)*256 + DATAEE_ReadByte(994));
                         printf("%u\r\n", (unsigned int) z);
+                        z = DATAEE_ReadByte(995);
+                        printf("Use quantization error = %u\r\n", z);
+                        z = DATAEE_ReadByte(996);
+                        printf("Elevation mask = %u\r\n", z);
                         printf("ID_Number = ");
                         z = (DATAEE_ReadByte(997)*256 + DATAEE_ReadByte(998));
                         printf("%u\r\n", (unsigned int) z);
@@ -973,6 +983,9 @@ void getCommand(void) {
                         } else {
                             DATAEE_WriteByte(995, 0);
                         }
+#ifdef VENUS838T
+                        DATAEE_WriteByte(996, venusElevMask);
+#endif                        
                         DATAEE_WriteByte(997, highByte(ID_Number));
                         DATAEE_WriteByte(998, lowByte(ID_Number));
                         DATAEE_WriteByte(999, highByte((uint16_t) (TICmin * 10.0)));
@@ -1036,6 +1049,19 @@ void getCommand(void) {
                     printf("Not a valid warmup time - Shall be between 2 and 1000\r\n");
                 }
                 break;
+#ifdef VENUS838T
+            case x: // elevation mask
+            case X:
+                z = parseInt();
+                if (z >= 5 && z <= 85) {
+                    venusElevMask = (uint8_t) z;
+                    printf("Elevation mask ");
+                    printf("%d\r\n", z);
+                } else {
+                    printf("Not a valid elevation - Shall be between 5 and 85 degrees\r\n");
+                }
+                break;
+#endif
 
 
             default:
@@ -1094,9 +1120,7 @@ void printDataToSerial(void) {
         printf("\t");
         printf("%ld", filterConst);
         printf("\t");
-        //printf("%12lu",timer1CounterValue);
-        //printf("\t");
-
+        
         if (i == 1) {
             printf("Five minute averages: TIC+DAC");
             printf("\t");
@@ -1198,7 +1222,7 @@ void printHeader1_ToSerial(void) {
 ////////////////////////////////////////////////////////////////////////////////////////////////
 
 void printHeader2_ToSerial(void) {
-    printf("Version 02/14/2023");
+    printf("Version 02/25/2023");
     printf("  ID:");
     printf("%d", ID_Number);
     printf("\t");
@@ -1225,9 +1249,7 @@ void printHeader3_ToSerial(void) {
     printf("\t");
     printf("tc");
     printf("\t");
-    printf("filt");
-    printf("\t");
-    printf("timer1\r\n");
+    printf("filt\r\n");
 }
 
 void counterSetup(void) {
@@ -1254,15 +1276,19 @@ void lcdSetup(void) {
 }
 
 void setup(void) {
-    gpsConfig();
-    lostPPSCount = 0;
-
     // Print info and header in beginning
     if (serialMode == on) {
         printf("\r\n\r\n\r\n");
         printHeader1_ToSerial();
         printf("\t"); // prints a tab
     }
+ 
+    lostPPSCount = 0;
+#ifdef VENUS838T
+    venusElevMask = 20;
+#endif    
+    quantErrFlag = false;
+    
     // Read data from EEPROM to variables
     unsigned int y;
     y = DATAEE_ReadByte(993)*256 + DATAEE_ReadByte(994);
@@ -1272,6 +1298,10 @@ void setup(void) {
     }
     if (DATAEE_ReadByte(995) > 0) quantErrFlag = true;
     else quantErrFlag = false;
+#ifdef VENUS838T
+    venusElevMask = DATAEE_ReadByte(996);
+    if (venusElevMask<5 || venusElevMask>85) venusElevMask = 20;
+#endif    
     y = DATAEE_ReadByte(997)*256 + DATAEE_ReadByte(998);
     if ((y > 0) && (y < 65535)) // set last stored xx if not 0 or 65535
     {
@@ -1340,6 +1370,9 @@ void setup(void) {
     k = DATAEE_ReadByte(1023); // last index of stored 3 hour average
     if ((k > 143) || (k < 0)) k = 0; //reset if k is invalid (eg with a new processor)
 
+    gpsConfig();
+
+    
     // Set "16bit DAC"  
     PWM1_16BIT_SetSlice1Output1DutyCycleRegister((uint16_t) dacValueOut);
     PWM1_16BIT_LoadBufferRegisters();

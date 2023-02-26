@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
+#include <string.h>
 #include "defines.h"
 #include "mcc_generated_files/mcc.h"
 #include "xlcd.h"
@@ -8,6 +9,7 @@
 
 void gpsParse(void);
 void gpsRead(void);
+void gpsStartup(void);
 void gpsExtraOff(void);
 void gpsExtraOn(void);
 void sendGps(const uint8_t *data, int len);
@@ -27,8 +29,13 @@ extern float quantErr;
 #endif
 
 #ifdef VENUS838T
-extern uint8_t venusMode;
-extern uint8_t venusSurveyCnt[8];
+//#define VENUS_115200_BAUD
+uint8_t venusMode;
+uint8_t venusSurveyCnt[8];
+uint8_t venusElevMask;
+void sendVenus(const uint8_t *cmd, int len);
+uint8_t readVenusAck(void);
+void setVenusElevMask(uint8_t x);
 #endif
 
 
@@ -36,72 +43,168 @@ extern uint8_t venusSurveyCnt[8];
 
 void gpsConfig(void) {
     // delay to allow gps to start up
-    __delay_ms(3000);
+    __delay_ms(1000);
+    gpsStartup();
     gpsExtraOff();
 }
 
-
-// send cmd to gps to turn off extra NMEA messages
-
+/*
+ * send command to gps to turn off extra NMEA messages
+ */
 void gpsExtraOff(void) {
 
 #ifdef YIC51612
     const uint8_t gpsOffStr[] = "$PMTK314,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0*29\r\n";
     sendGps(gpsOffStr, 51);
 #endif
+    
+}
+
+/* 
+ * commands to configure gps at startup
+ */
+void gpsStartup(void) {
 
 #ifdef VENUS838T
-    const uint8_t gpsOffStr[16]
-            = {0xa0, 0xa1, 0x00, // header
-        0x09, // length   
-        0x08, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // data
-        0x09, // checksum
-        0x0d, 0x0a}; // end
+    const uint8_t setTimingStr[31]
+            = { 0x54, 0x01, 0x00, 0x00, 0x0f, 0xd0, // uint8 mode, uint32 survey len 4048
+                0x00, 0x00, 0x00, 0x1e, // uint32 survey std dev
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00}; 
+    const uint8_t resetStr[2] = {0x04, 0x00};
+    
+    if (serialMode == on) printf("\r\nConfigure GPS Venus 838LPx-T\r\n\r\n");
 
-    const uint8_t setBaudStr[11]
-            = {0xa0, 0xa1, 0x00, // header
-        0x04, // length   
-        0x05, 0x00, 0x05, 0x02, // data
-        0x02, // checksum
-        0x0d, 0x0a}; // end
-
-    const uint8_t setTimingStr[42]
-            = {0xa0, 0xa1, 0x00, // header
-        0x1f, // length   
-        0x54, 0x01, 0x00, 0x00, 0x0f, 0xd0, // uint8 mode, uint32 survey len 4048
-        0x00, 0x00, 0x00, 0x1e, // uint32 survey std dev
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00,
-        0x00,
-        0x94, // checksum
-        0x0d, 0x0a}; // end
-
-    // set timing mode and survey length
-    sendGps(setTimingStr, 42);
-    __delay_ms(50);
-
-    // turn off extra nmea (might not be needed)
-    sendGps(gpsOffStr, 16);
-    __delay_ms(50);
-
-    // switch to 115200 baud
-    sendGps(setBaudStr, 11);
-    __delay_ms(50);
+#ifdef VENUS_115200_BAUD
+    // switch to 115200 baud temporarily
+    // not sure if this works correctly
+    
+    const uint8_t setBaudStr[4]
+            = { 0x05, 0x00, 0x05, 0x02};
+    if (serialMode == on) printf("->Set 115200 baud\r\n");
+    sendVenus(setBaudStr, 4);
+    readVenusAck();
 
     // switch uart2 baud rate to 115200
     INTERRUPT_GlobalInterruptDisable();
     UART2_Initialize(0x8c, 0x00);
     __delay_ms(10);
     INTERRUPT_GlobalInterruptEnable();
-
-
 #endif
 
+    // reset to factory command does not seem to generate ack/nack
+    if (serialMode == on) printf("->Restart GPS\r\n");
+    sendVenus(resetStr, 2);
+    __delay_ms(100);
+    
+    if (serialMode == on) printf("->Set timing mode and survey length\r\n");
+    sendVenus(setTimingStr, 31);
+    readVenusAck();
+    
+    setVenusElevMask(venusElevMask);
+ #endif
 }
 
-// send cmd to gps to turn on extra NMEA messages
+#ifdef VENUS838T
+/*
+ * set elevation mask; x is mask value in degrees
+ */
+void setVenusElevMask(uint8_t x) {
+    uint8_t maskStr[5];
+   
+    if ((x<5) || (x>85)) return;
+    
+    maskStr[0] = 0x2b;
+    maskStr[1] = 0x02; // set elev mask only
+    maskStr[2] = x;
+    maskStr[3] = 0x0a; // min SNR=10; not used
+    maskStr[4] = 0x00;
+        
+    if (serialMode == on) printf("->Set %d deg elevation mask\r\n", x);
+    sendVenus(maskStr, 5);
+    readVenusAck();
+}
 
+/* 
+ * send binary command to Venus GPS 
+ */
+void sendVenus(const uint8_t *cmd, int len) {
+    uint8_t data[42];
+    int i,cnt,n;
+    uint8_t checksum;
+    
+    n = len+7;
+    memset(data, 0, n);
+    data[0] = 0xa0;
+    data[1] = 0xa1;
+    data[2] = 0x00;
+    data[3] = (uint8_t)len;
+    cnt = 4;
+    checksum = 0;
+    for (i=0; i<len; i++) {
+        data[cnt++] = cmd[i];
+        checksum = checksum ^ cmd[i];
+    }
+    data[cnt++] = checksum;
+    data[cnt++] = 0x0d;
+    data[cnt] = 0x0a;
+    sendGps(data, n);
+}
+
+/* 
+ * Listen for Venus GPS Ack/Nack message. Returns
+ 0 Nack
+ 1 Ack
+ 2 error 
+ 
+ ack format:
+  
+ 0x24 0x47 0x00 0x02 0x83 0x54 0xd7 0x0d 0x0a
+ 
+ 0x83 = ack, 0x84 = nack
+ 
+ */
+uint8_t readVenusAck(void) {
+    int i;
+    uint8_t cs;
+    uint8_t dat[5];
+    
+    // wait for an ack/nack. May be other data still in
+    // incoming serial buffer since not using interrupt
+    // for uart2 receive
+    do {
+        while (!UART2_is_rx_ready()) {
+        }
+        dat[0] = UART2_Read();
+    } while (dat[0]!=0x83 && dat[0]!=0x84);
+    
+    // read rest of response
+    for (i = 1; i < 5; i++) {
+        while (!UART2_is_rx_ready()) {
+        }
+        dat[i] = UART2_Read();
+    }
+    cs = 0;
+    cs = cs ^ dat[0];
+    cs = cs ^ dat[1];
+    if (cs != dat[2]) {
+        if (serialMode == on) printf("  uart error\r\n");
+        return 2;
+    }
+    if (dat[0] == 0x83) {
+        if (serialMode == on) printf("  OK\r\n");
+        return 1;
+    } else {
+        if (serialMode == on) printf("  Not OK\r\n");
+        return 0;
+    }
+}
+#endif
+
+/*
+ * send cmd to gps to turn on extra NMEA messages
+ */
 void gpsExtraOn(void) {
 
 #ifdef YIC51612  
@@ -112,7 +215,7 @@ void gpsExtraOn(void) {
 }
 
 /* 
-send a serial command to gps
+* send a serial command to gps
 */
 void sendGps(const uint8_t *data, int len) {
     int i;
@@ -122,7 +225,7 @@ void sendGps(const uint8_t *data, int len) {
         UART2_Write(data[i]);
         __delay_ms(1);
     }
-    __delay_ms(10);
+    __delay_ms(5);
 }
 
 /*
@@ -142,17 +245,7 @@ void gpsRead(void) {
         } else if (c == 0x2a) { // '*'
             // ignore checksum, parse sentence
             gpsParse();
-        } else
-#ifdef VENUS838T
-            /*
-            if (c == 0x02) { // ack
-                printf("ACK\r\n");
-            } else if (c = 0x03) { // nack
-                printf("NACK\r\n");
-            } else
-             */
-#endif  
-        {
+        } else {
             gpsCnt++;
             gpsSentence[gpsCnt] = c;
         }
@@ -160,11 +253,12 @@ void gpsRead(void) {
 }
 
 /* 
- * parse NMEA line for time and grid square 
+ * parse NMEA line for time, grid square, and time quantization error 
  */
 void gpsParse(void) {
 
 #ifdef VENUS838T
+    // NMEA line for Venus838LPx-T timing mode
     int ii, jj;
     uint8_t error[6];
 
@@ -204,8 +298,8 @@ void gpsParse(void) {
     }
 #endif  
     if (gpsSentence[3] == 0x47 && // 'G'
-            gpsSentence[4] == 0x47 && // 'G'
-            gpsSentence[5] == 0x41) { // 'A'
+        gpsSentence[4] == 0x47 && // 'G'
+        gpsSentence[5] == 0x41) { // 'A'
 
         if (screen == 0) {
             // time

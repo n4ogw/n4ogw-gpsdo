@@ -4,7 +4,7 @@
  R. Torsten Clay N4OGW
   
  for board version 2
- 02/25/2023
+ 03/12/2023
 
   1. Counts 10 MHz directly using PIC SMT
   2. Divides 10 MHz down to 1 MHz; measures phase difference between 1 MHz and
@@ -134,6 +134,7 @@ volatile bool SMTFlag = false;
 extern uint8_t venusElevMask;
 extern uint8_t venusMode;
 extern uint8_t venusSurveyCnt[8];
+extern void setVenusElevMask(uint8_t x);
 #endif
 
 float quantErr;
@@ -262,13 +263,13 @@ void SMT1_PW_ACQ_ISR(void) {
     timer1CounterValueOld = timer1CounterValue;
     timer1CounterValue = SMT1CPW;
 
-    // handle counter rollover (SMT is 24 bit counter)
+    // handle counter rollover (SMT is 24 bit counter, value is held as
+    // 32-bit unsigned)
+    elapsed = timer1CounterValue - timer1CounterValueOld;
     if (timer1CounterValue < timer1CounterValueOld) {
-        elapsed = (0xFFFFFF - timer1CounterValueOld) + 1 + timer1CounterValue;
-    } else {
-        elapsed = timer1CounterValue - timer1CounterValueOld;
+      elapsed += 0xff000000;
     }
-
+   
     totalErr += (elapsed - FREQ);
     cnt++;
 
@@ -375,7 +376,7 @@ void calculation(void) {
     }
 
     // reset in the beginning and end of warmup 
-    if (time < 3 || (time > warmUpTime - 1 && time < warmUpTime + 1)) {
+    if (time < 3 || (time > (warmUpTime - 1) && time < (warmUpTime + 1))) {
         timer_us = 0;
     }
 
@@ -489,7 +490,7 @@ void calculation(void) {
     }
 
     // Don't change DAC-value during warm-up time or if in hold mode
-    if (time > warmUpTime && opMode == run) {
+    if (time > (warmUpTime + 1) && opMode == run) {
         ////// PI-loop ///////
         // remember /timeConst is done before dacValue is sent out
         P_term = (TIC_ValueFiltered - TIC_Offset * filterConst) / (float) (filterConst) * gain;
@@ -571,11 +572,11 @@ void calculation(void) {
             sumDAC2 = sumDAC2 / 36;
 
             if (opMode == run) {
-                DATAEE_WriteByte((uint16_t) (k + 288), highByte((uint16_t) sumDAC2));
-                DATAEE_WriteByte((uint16_t) (k + 432), lowByte((uint16_t) sumDAC2));
+                DATAEE_WriteByte((uint16_t) (k + 2*NSTORE), highByte((uint16_t) sumDAC2));
+                DATAEE_WriteByte((uint16_t) (k + 3*NSTORE), lowByte((uint16_t) sumDAC2));
             } else {
-                DATAEE_WriteByte((uint16_t) (k + 288), highByte((uint16_t) (((FREQ - 1) - timer1CounterValue))));
-                DATAEE_WriteByte((uint16_t) (k + 432), lowByte((uint16_t) ((FREQ - 1) - timer1CounterValue)));
+                DATAEE_WriteByte((uint16_t) (k + 2*NSTORE), highByte((uint16_t) (((FREQ - 1) - timer1CounterValue))));
+                DATAEE_WriteByte((uint16_t) (k + 3*NSTORE), lowByte((uint16_t) ((FREQ - 1) - timer1CounterValue)));
             }
 
             if (opMode == run && lockPPScounter > 10800) {
@@ -639,8 +640,9 @@ void getCommand(void) {
         u = 'u', U = 'U', // set TIC linearization parameters cube (enter value*100))
         w = 'w', W = 'W', // set warmup time (to allow for warm up of oscillator)
 #ifdef VENUS838T
-        x = 'x', X = 'X'  // set GPS elevation mask
+        x = 'x', X = 'X',  // set GPS elevation mask
 #endif        
+        y ='y', Y = 'Y' // set frequency counter gate time
     };
 
     //process if something is there
@@ -653,8 +655,7 @@ void getCommand(void) {
                 z = parseInt(); //needs new line or carriage return set in Arduino serial monitor
                 if (z >= 50 && z <= 1000) {
                     damping = z / (float) 100.0;
-                    printf("Damping ");
-                    printf("%f\r\n", damping);
+                    printf("Damping %f\r\n", damping);
                 } else {
                     printf("Not a valid damping value - Shall be between 50 and 1000\r\n");
                 }
@@ -737,15 +738,11 @@ void getCommand(void) {
 
                     case 1:
                         printf("\r\n");
-
                         printHeader1_ToSerial();
                         printf("\t");
                         printHeader2_ToSerial();
-                        printf("\r\n");
-                        printf("\r\n");
-                        printf("Info and help - To get values for gain etc type f2 <enter> and f4 <enter> EEPROM\r\n");
-                        printf("\r\n");
-                        printf("Typing a<value><enter> will set a new damping between between 0.50 and 10.00 set 50 to 1000\r\n");
+                        printf("\r\n\r\nInfo and help - To get values for gain etc type f2 <enter> and f4 <enter> EEPROM\r\n");
+                        printf("\r\nTyping a<value><enter> will set a new damping between between 0.50 and 10.00 set 50 to 1000\r\n");
                         printf("Typing b<value><enter> turns GPS error correction on (1) or off (0)\r\n");
                         printf("Typing d<value><enter> will set a new dacValue between 1 and 65535\r\n");
                         printf("Typing e<value><enter> will erase the 3 hour storage in EEPROM if value 1 and all EEPROM if 22 (33 sets all EEPROM to FF)\r\n");
@@ -762,8 +759,12 @@ void getCommand(void) {
                         printf("Typing p<value><enter> will set a new prefilter div between 2 and 4\r\n");
                         printf("Typing r<enter> will set run mode\r\n");
                         printf("Typing s<value><enter> will save gain etc to EEPROM if value 1 and dacvalue if 2\r\n");
-                        printf("Typing t<value><enter> will set a new time constant between 4 and 1024 seconds\r\n");
+                        printf("Typing t<value><enter> will set a new time constant; must be power of 2 between 4 and 1024 seconds\r\n");
                         printf("Typing w<value><enter> will set a new warmup time between 2 and 1000 seconds\r\n");
+#ifdef VENUS838T
+			printf("Typing x<value><enter> will set the GPS elevation mask between 5 and 85 degrees\r\n");
+#endif
+                        printf("Typing y<value><enter> will set the frequency counter gate time; possible values 10, 100, 1000, or 10000 seconds\r\n");
                         printf("\r\n");
                         printHeader3_ToSerial();
                         break;
@@ -803,59 +804,57 @@ void getCommand(void) {
                         } else {
                             printf(" off\r\n");
                         }
-                        printf("  elevation mask: %2d deg\r\n", venusElevMask);
+                        printf("  elevation mask: %2u deg\r\n", venusElevMask);
 #endif
                         printf("\r\n");
                         printHeader3_ToSerial();
                         break;
 
                     case 4:
-                        printf("\r\n");
-                        printf("EEPROM content: \r\n");
-                        printf("totalTime3h = ");
+                        printf("\r\nEEPROM content: \r\ntotalTime3h = ");
                         z = (DATAEE_ReadByte(993)*256 + DATAEE_ReadByte(994));
-                        printf("%u\r\n", (unsigned int) z);
+                        printf("%ld\r\n", z);
                         z = DATAEE_ReadByte(995);
                         printf("Use quantization error = %u\r\n", z);
                         z = DATAEE_ReadByte(996);
-                        printf("Elevation mask = %u\r\n", z);
+                        printf("Elevation mask = %ld\r\n", z);
                         printf("ID_Number = ");
                         z = (DATAEE_ReadByte(997)*256 + DATAEE_ReadByte(998));
-                        printf("%u\r\n", (unsigned int) z);
+                        printf("%ld\r\n", z);
                         printf("TICmin = ");
                         z = (DATAEE_ReadByte(999)*256 + DATAEE_ReadByte(1000));
-                        printf("%u\r\n", (unsigned int) z);
+                        printf("%ld\r\n", z);
                         printf("TICmax = ");
                         z = (DATAEE_ReadByte(1001)*256 + DATAEE_ReadByte(1002));
-                        printf("%u\r\n", (unsigned int) z);
+                        printf("%ld\r\n", z);
                         printf("x2 = ");
                         z = (DATAEE_ReadByte(1003)*256 + DATAEE_ReadByte(1004));
-                        printf("%u\r\n", (unsigned int) z);
+                        printf("%ld\r\n", z);
                         printf("TIC_Offset = ");
                         z = (DATAEE_ReadByte(1005)*256 + DATAEE_ReadByte(1006));
-                        printf("%u\r\n", (unsigned int) z);
+                        printf("%ld\r\n", z);
                         printf("filterDiv = ");
                         z = (DATAEE_ReadByte(1007)*256 + DATAEE_ReadByte(1008));
-                        printf("%u\r\n", (unsigned int) z);
+                        printf("%ld\r\n", z);
                         printf("warmUpTime = ");
                         z = (DATAEE_ReadByte(1009)*256 + DATAEE_ReadByte(1010));
-                        printf("%u\r\n", (unsigned int) z);
+                        printf("%ld\r\n", z);
                         printf("damping = ");
                         z = (DATAEE_ReadByte(1011)*256 + DATAEE_ReadByte(1012));
-                        printf("%u\r\n", (unsigned int) z);
+                        printf("%ld\r\n", z);
                         printf("dacValueOut = ");
                         z = (DATAEE_ReadByte(1017)*256 + DATAEE_ReadByte(1018));
-                        printf("%u\r\n", (unsigned int) z);
+                        printf("%ld\r\n", z);
                         printf("gain = ");
                         z = (DATAEE_ReadByte(1019)*256 + DATAEE_ReadByte(1020));
-                        printf("%u\r\n", (unsigned int) z);
+                        printf("%ld\r\n", z);
                         printf("timeConst = ");
                         z = (DATAEE_ReadByte(1021)*256 + DATAEE_ReadByte(1022));
-                        printf("%u\r\n", (unsigned int) z);
+                        printf("%ld\r\n", z);
                         printf("k = %d\r\n", DATAEE_ReadByte(1023));
                         printf("counter = ");
                         z = (DATAEE_ReadByte(1013)*256 + DATAEE_ReadByte(1014));
-                        printf("%u\r\n", (unsigned int) z);
+                        printf("%ld\r\n", z);
                         printf("\r\n");
                         break;
 
@@ -1028,12 +1027,56 @@ void getCommand(void) {
             case t: // time constant command
             case T:
                 z = parseInt();
-                if (z >= 4 && z <= 1024) {
-                    timeConst = z;
-                    printf("time constant ");
-                    printf("%ld\r\n", z);
-                } else {
-                    printf("Not a valid time constant - Shall be between 4 and 1024\r\n");
+                // must match with possible values allowed by LCD/button interface
+                switch (z) {
+                    case 2:
+                    case 4:
+                    case 8:
+                    case 16:
+                    case 32:
+                    case 64:
+                    case 128:
+                    case 256:
+                    case 512:
+                    case 1024:
+                        timeConst = z;
+                        printf("time constant ");
+                        printf("%ld\r\n", z);
+                        if (screen == sett) {
+                            CLCD_SetPos(0, 7);
+                            switch (timeConst) {
+                                case 4:
+                                    CLCD_PutS("4   ");
+                                    break;
+                                case 8:
+                                    CLCD_PutS("8   ");
+                                    break;
+                                case 16:
+                                    CLCD_PutS("16  ");
+                                    break;
+                                case 32:
+                                    CLCD_PutS("32  ");
+                                    break;
+                                case 64:
+                                    CLCD_PutS("64  ");
+                                    break;
+                                case 128:
+                                    CLCD_PutS("128 ");
+                                    break;
+                                case 256:
+                                    CLCD_PutS("256 ");
+                                    break;
+                                case 512:
+                                    CLCD_PutS("512 ");
+                                    break;
+                                case 1024:
+                                    CLCD_PutS("1024");
+                                    break;
+                            }
+                        }
+                        break;
+                    default:      
+                        printf("Not a valid time constant - Shall be one of 4, 8, 16, 32, 64, 128, 256, 512, or 1024\r\n");
                 }
                 break;
 
@@ -1057,12 +1100,46 @@ void getCommand(void) {
                     venusElevMask = (uint8_t) z;
                     printf("Elevation mask ");
                     printf("%d\r\n", z);
+                    setVenusElevMask(z);
                 } else {
                     printf("Not a valid elevation - Shall be between 5 and 85 degrees\r\n");
                 }
                 break;
 #endif
-
+            case y: // freq counter gate time
+            case Y:
+                z = parseInt();
+                switch (z) {
+                    case 10:
+                    case 100:
+                    case 1000:
+                    case 10000:
+                        nCnt = z;
+                        if (screen == setncnt) {
+                            CLCD_SetPos(0, 5);
+                            switch (nCnt) {
+                            case 10:
+                                CLCD_PutS("10   ");
+                                break;
+                            case 100:
+                                CLCD_PutS("100  ");
+                                break;
+                            case 1000:
+                                CLCD_PutS("1000 ");
+                                break;
+                            case 10000:
+                                CLCD_PutS("10000");
+                                break;
+                            }
+                        }
+                        printf("Frequency counter gate time %ld\r\n", z);
+                        cnt = 0;
+                        totalErr = 0;
+                        break;
+                    default:
+                        printf("Not a valid frequency counter time. Must be 10, 100, 1000, or 10000 seconds\r\n");
+                }
+                break;
 
             default:
                 printf("No valid command\r\n");
@@ -1077,19 +1154,20 @@ void getCommand(void) {
 
 void printDataToSerial(void) {
     printf("%lu \t", time);
-    if (nsDisplayedDecimals == false) {
-        printf("%.0f",
-                ((float)timer_us *1000) + 
-                TIC_ValueCorr - TIC_ValueCorrOffset);
-        printf("\t");
-    } else {
-        printf("%.1f",
-                ((float)timer_us *1000) + 
-                TIC_ValueCorr - TIC_ValueCorrOffset);
-        printf("\t");
+    if (time > warmUpTime) {
+        if (nsDisplayedDecimals == false) {
+            printf("%.0f",
+                    ((float)timer_us *1000) + 
+                    TIC_ValueCorr - TIC_ValueCorrOffset);
+            printf("\t");
+        } else {
+            printf("%.1f",
+                    ((float)timer_us *1000) + 
+                    TIC_ValueCorr - TIC_ValueCorrOffset);
+            printf("\t");
+        }
     }
-    printf("%ld", dacValueOut);
-    printf("\t");
+    printf("%ld\t", dacValueOut);
 
     if (time > warmUpTime && opMode == run) {
         if (PPSlocked == 0) {
@@ -1099,64 +1177,45 @@ void printDataToSerial(void) {
         }
         printf("\t");
     } else if (time > warmUpTime) {
-        printf("Hold");
-        printf("\t");
+        printf("Hold\t");
     } else {
-        printf("WarmUp");
-        printf("\r\n");
+        printf("WarmUp\r\n");
         return;
     }
 
     if (lessInfoDisplayed == false) {
-        printf("%ld", diff_ns);
-        printf("\t");
+        printf("%ld\t", diff_ns);
 #ifdef VENUS838T
         printf("%.1f", quantErr);
         printf("\t");
 #endif
-        printf("%ld", TIC_ValueFiltered * 10 / filterConst);
-        printf("\t");
-        printf("%ld", timeConst);
-        printf("\t");
-        printf("%ld", filterConst);
-        printf("\t");
+        printf("%ld\t", TIC_ValueFiltered * 10 / filterConst);
+        printf("%ld\t", timeConst);
+        printf("%ld\t", filterConst);
         
         if (i == 1) {
-            printf("Five minute averages: TIC+DAC");
-            printf("\t");
+            printf("Five minute averages: TIC+DAC\t");
         }
         if (i == 2) {
-            printf("Now acquiring value: ");
-            printf("%d", j);
-            printf("\t");
+            printf("Now acquiring value: %d\t", j);
         }
         if ((i >= 4) && (i <= 147)) {
-            printf("%d", (i - 4));
-            printf("\t");
-            printf("%d", (StoreTIC_A[i - 4]));
-            printf("\t");
-            printf("%u", (StoreDAC_A[i - 4]));
-            printf("\t");
-
+            printf("%d\t", (i - 4));
+            printf("%d\t", (StoreTIC_A[i - 4]));
+            printf("%u\t", (StoreDAC_A[i - 4]));
         }
         if (i == 148) {
-            printf("Three hour averages: TIC+DAC");
-            printf("\t");
+            printf("Three hour averages: TIC+DAC\t");
         }
         if (i == 149) {
-            printf("Now acquiring value: ");
-            printf("%d", k);
-            printf("\t");
+            printf("Now acquiring value: %d\t", k);
         }
         if ((i >= 150) && (i <= 293)) {
-            printf("%d", (i - 150 + 1000));
-            printf("\t");
-            printf("%d", (DATAEE_ReadByte((uint16_t) (i - 150 + 0))*256 + DATAEE_ReadByte((uint16_t) (i - 150 + NSTORE))));
-            printf("\t");
-            unsigned int x = DATAEE_ReadByte((uint16_t) (i - 150 + 288))*256 + DATAEE_ReadByte((uint16_t) (i - 150 + 432));
-            printf("%u", x);
-
-            printf("\t");
+            printf("%d\t", (i - 150 + 1000));
+            printf("%d\t", (DATAEE_ReadByte((uint16_t) (i - 150 + 0))*256 + DATAEE_ReadByte((uint16_t) (i - 150 + NSTORE))));
+            unsigned int x = DATAEE_ReadByte((uint16_t) (i - 150 + 2*NSTORE))*256 + DATAEE_ReadByte((uint16_t) (i - 150 + 3*NSTORE));
+            printf("%u\t", x);
+	    x = DATAEE_ReadByte((uint16_t) (i-150+4*NSTORE))*256 + DATAEE_ReadByte((uint16_t) i-150+5*NSTORE);
             int y = x / 10240;
             switch (y) {
                 case 0:
@@ -1180,27 +1239,16 @@ void printDataToSerial(void) {
             printf("\t");
         }
         if (i == 295) {
-            printf("TimeConst = ");
-            printf("%ld", timeConst);
-            printf(" sec ");
-            printf("\t");
+            printf("TimeConst = %ld sec\t", timeConst);
         }
         if (i == 296) {
-            printf("Prefilter = ");
-            printf("%ld", filterConst);
-            printf(" sec ");
-            printf("\t");
+            printf("Prefilter = %ld sec\t", filterConst);
         }
         if (i == 297) {
-            printf("Damping = ");
-            printf("%4.1f", damping);
-            printf(" Gain = ");
-            printf("%ld", gain);
-            printf("\t");
+	  printf("Damping = %4.1f Gain = %ld\t", damping, gain);
         }
         if (i == 298) {
-            printf("Type f1<enter> to get help+info");
-            printf("\t");
+            printf("Type f1<enter> to get help+info\t");
         }
         if (i == 299) {
             printHeader2_ToSerial();
@@ -1222,34 +1270,17 @@ void printHeader1_ToSerial(void) {
 ////////////////////////////////////////////////////////////////////////////////////////////////
 
 void printHeader2_ToSerial(void) {
-    printf("Version 02/25/2023");
-    printf("  ID:");
-    printf("%d", ID_Number);
-    printf("\t");
+    printf("Version 03/12/2023  ID: %d\t", ID_Number);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
 
 void printHeader3_ToSerial(void) {
-    printf("time");
-    printf("\t");
-    printf("ns");
-    printf("\t");
-    printf("dac");
-    printf("\t");
-    printf("status");
-    printf("\t");
-    printf("diff_ns");
-    printf("\t");
+    printf("time\tns\tdac\tstatus\tdiff_ns\t");
 #ifdef VENUS838T
     printf("gps err");
 #endif
-    printf("\t");
-    printf("filtX10");
-    printf("\t");
-    printf("tc");
-    printf("\t");
-    printf("filt\r\n");
+    printf("\tfiltX10\ttc\tfilt\r\n");
 }
 
 void counterSetup(void) {
@@ -1285,7 +1316,7 @@ void setup(void) {
  
     lostPPSCount = 0;
 #ifdef VENUS838T
-    venusElevMask = 20;
+    venusElevMask = 25;
 #endif    
     quantErrFlag = false;
     
@@ -1343,8 +1374,8 @@ void setup(void) {
         damping = y / (float) 100.0;
     }
     y = DATAEE_ReadByte(1013)*256 + DATAEE_ReadByte(1014);
-    if ((y >= 1) && (y <= 10000)) {
-        nCnt = (int) y;
+    if ((y >= 10) && (y <= 10000)) {
+        nCnt = (uint16_t) y;
     }
     y = DATAEE_ReadByte(1015)*256 + DATAEE_ReadByte(1016);
     if ((y > 0) && (y < 65535)) // set last stored xx if not 0 or 65535
@@ -1361,7 +1392,6 @@ void setup(void) {
     {
         gain = y;
     }
-
     y = DATAEE_ReadByte(1021)*256 + DATAEE_ReadByte(1022);
     if ((y >= 4) && (y <= 32000)) // set last stored timeConst if between 4 and 32000
     {
@@ -1389,8 +1419,7 @@ void setup(void) {
     // Print info and header in beginning
     if (serialMode == on) {
         printHeader2_ToSerial();
-        printf("\r\n"); // prints a carriage return  
-        printf("Type f1+enter to get help\r\n");
+        printf("\r\nType f1+enter to get help\r\n");
         printHeader3_ToSerial();
     }
 

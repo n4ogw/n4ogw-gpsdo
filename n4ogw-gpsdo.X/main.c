@@ -4,7 +4,7 @@
  R. Torsten Clay N4OGW
   
  for board version 2
- 03/12/2023
+ 04/04/2023
 
   1. Counts 10 MHz directly using PIC SMT
   2. Divides 10 MHz down to 1 MHz; measures phase difference between 1 MHz and
@@ -138,10 +138,10 @@ extern void setVenusElevMask(uint8_t x);
 #endif
 
 float quantErr;
-bool quantErrFlag; // correct for gps time quantization error if available
+bool quantErrFlag;      // correct for gps time quantization error if available
 int lockPPSlimit = 200; // if TIC filtered for PPS within +- this for lockPSfactor * timeConst = PPSlocked
-// ~ 100 per 1000 of ADC range
-int lockPPSfactor = 5; // see above
+                        // ~ 100 per 1000 of ADC range
+int lockPPSfactor = 5;  // see above
 unsigned long lockPPScounter; // counter for PPSlocked
 bool PPSlocked; // prints 0 or 1
 
@@ -163,10 +163,10 @@ unsigned int ID_Number;
 bool lessInfoDisplayed;
 bool nsDisplayedDecimals;
 
-Modes opMode = run; //operating mode
-Modes newMode = hold; // used to reset timer_us when run is set and at to many missing PPS
 SerialModes serialMode = on;
 unsigned int holdValue; //DAC value for Hold mode
+Modes opMode; //operating mode
+Modes newMode; // used to reset timer_us when run is set and at to many missing PPS
 
 // for TIC linearization
 // RTC: best parameters found using a PicDiv
@@ -224,9 +224,12 @@ void main(void) {
     lcdSetup();
     PWM1_16BIT_Enable();
     SMT1_DataAcquisitionEnable();
+    
+    INTERRUPT_GlobalInterruptEnable();
+    
     while (1) {
         if (SMTFlag == true) {
-            if (cnt == nCnt) {
+            if (cnt >= nCnt) {
                 counterUpdate();
             }
             SMTFlag = false;
@@ -815,7 +818,7 @@ void getCommand(void) {
                         z = (DATAEE_ReadByte(993)*256 + DATAEE_ReadByte(994));
                         printf("%ld\r\n", z);
                         z = DATAEE_ReadByte(995);
-                        printf("Use quantization error = %u\r\n", z);
+                        printf("Use quantization error = %ld\r\n", z);
                         z = DATAEE_ReadByte(996);
                         printf("Elevation mask = %ld\r\n", z);
                         printf("ID_Number = ");
@@ -1099,7 +1102,7 @@ void getCommand(void) {
                 if (z >= 5 && z <= 85) {
                     venusElevMask = (uint8_t) z;
                     printf("Elevation mask ");
-                    printf("%d\r\n", z);
+                    printf("%ld\r\n", z);
                     setVenusElevMask(z);
                 } else {
                     printf("Not a valid elevation - Shall be between 5 and 85 degrees\r\n");
@@ -1270,7 +1273,7 @@ void printHeader1_ToSerial(void) {
 ////////////////////////////////////////////////////////////////////////////////////////////////
 
 void printHeader2_ToSerial(void) {
-    printf("Version 03/12/2023  ID: %d\t", ID_Number);
+    printf("Version 04/04/2023  ID: %d\t", ID_Number);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1313,7 +1316,7 @@ void setup(void) {
         printHeader1_ToSerial();
         printf("\t"); // prints a tab
     }
- 
+    time = 0;
     lostPPSCount = 0;
 #ifdef VENUS838T
     venusElevMask = 25;
@@ -1366,7 +1369,7 @@ void setup(void) {
     y = DATAEE_ReadByte(1009)*256 + DATAEE_ReadByte(1010);
     if ((y > 0) && (y < 65535)) // set last stored xx if not 0 or 65535
     {
-        warmUpTime = (int) y;
+        warmUpTime = y;
     }
     y = DATAEE_ReadByte(1011)*256 + DATAEE_ReadByte(1012);
     if ((y > 0) && (y < 65535)) // set last stored xx if not 0 or 65535
@@ -1398,11 +1401,8 @@ void setup(void) {
         timeConst = y;
     }
     k = DATAEE_ReadByte(1023); // last index of stored 3 hour average
-    if ((k > 143) || (k < 0)) k = 0; //reset if k is invalid (eg with a new processor)
+    if ((k >= NSTORE) || (k < 0)) k = 0; //reset if k is invalid (eg with a new processor)
 
-    gpsConfig();
-
-    
     // Set "16bit DAC"  
     PWM1_16BIT_SetSlice1Output1DutyCycleRegister((uint16_t) dacValueOut);
     PWM1_16BIT_LoadBufferRegisters();
@@ -1415,13 +1415,8 @@ void setup(void) {
     TIC_ValueFiltered = TIC_Offset * filterConst;
     TIC_ValueFilteredForPPS_lock = TIC_Offset * lockFilterConst;
     nsDisplayedDecimals = true;
-
-    // Print info and header in beginning
-    if (serialMode == on) {
-        printHeader2_ToSerial();
-        printf("\r\nType f1+enter to get help\r\n");
-        printHeader3_ToSerial();
-    }
+    opMode = run;
+    newMode = hold;
 
     //clear  PPS flag and go on to main loop  
     ADCFlag = false;
@@ -1429,6 +1424,15 @@ void setup(void) {
     button1State = 0;
     button2State = 0;
     TMR6_SetInterruptHandler(buttonInterrupt);
+
+    gpsConfig();
+
+    // Print info and header in beginning
+    if (serialMode == on) {
+        printHeader2_ToSerial();
+        printf("\r\nType f1+enter to get help\r\n");
+        printHeader3_ToSerial();
+    }
 }
 
 

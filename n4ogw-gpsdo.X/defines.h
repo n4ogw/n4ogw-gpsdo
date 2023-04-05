@@ -12,6 +12,7 @@
 // type of GPS module
 //#define YIC51612
 #define VENUS838T
+#define VENUS_115200_BAUD
 #define QUANTERR
 
 typedef enum 

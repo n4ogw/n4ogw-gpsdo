@@ -29,7 +29,6 @@ extern float quantErr;
 #endif
 
 #ifdef VENUS838T
-//#define VENUS_115200_BAUD
 uint8_t venusMode;
 uint8_t venusSurveyCnt[8];
 uint8_t venusElevMask;
@@ -43,7 +42,7 @@ void setVenusElevMask(uint8_t x);
 
 void gpsConfig(void) {
     // delay to allow gps to start up
-    __delay_ms(1000);
+    __delay_ms(2000);
     gpsStartup();
     gpsExtraOff();
 }
@@ -64,7 +63,8 @@ void gpsExtraOff(void) {
  * commands to configure gps at startup
  */
 void gpsStartup(void) {
-
+    int8_t c;
+    
 #ifdef VENUS838T
     const uint8_t setTimingStr[31]
             = { 0x54, 0x01, 0x00, 0x00, 0x0f, 0xd0, // uint8 mode, uint32 survey len 4048
@@ -76,34 +76,36 @@ void gpsStartup(void) {
     
     if (serialMode == on) printf("\r\nConfigure GPS Venus 838LPx-T\r\n\r\n");
 
+    // reset to factory command does not seem to generate ack/nack
+    if (serialMode == on) printf("->Reset GPS\r\n");
+    sendVenus(resetStr, 2);
+    __delay_ms(1000);
+        
+    if (serialMode == on) printf("->Set timing mode and survey length\r\n");
+    sendVenus(setTimingStr, 31);
+    readVenusAck();
+    __delay_ms(100);
+    
+    setVenusElevMask(venusElevMask);
+    __delay_ms(100);
+    
 #ifdef VENUS_115200_BAUD
     // switch to 115200 baud temporarily
-    // not sure if this works correctly
     
     const uint8_t setBaudStr[4]
             = { 0x05, 0x00, 0x05, 0x02};
     if (serialMode == on) printf("->Set 115200 baud\r\n");
     sendVenus(setBaudStr, 4);
     readVenusAck();
-
+    
     // switch uart2 baud rate to 115200
     INTERRUPT_GlobalInterruptDisable();
-    UART2_Initialize(0x8c, 0x00);
-    __delay_ms(10);
+    UART2_Initialize(0x8a, 0x00);
     INTERRUPT_GlobalInterruptEnable();
+    __delay_ms(10);
 #endif
 
-    // reset to factory command does not seem to generate ack/nack
-    if (serialMode == on) printf("->Restart GPS\r\n");
-    sendVenus(resetStr, 2);
-    __delay_ms(100);
-    
-    if (serialMode == on) printf("->Set timing mode and survey length\r\n");
-    sendVenus(setTimingStr, 31);
-    readVenusAck();
-    
-    setVenusElevMask(venusElevMask);
- #endif
+#endif
 }
 
 #ifdef VENUS838T

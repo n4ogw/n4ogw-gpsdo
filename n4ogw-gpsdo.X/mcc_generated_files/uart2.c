@@ -63,6 +63,9 @@ void UART2_DefaultFramingErrorHandler(void);
 void UART2_DefaultOverrunErrorHandler(void);
 void UART2_DefaultErrorHandler(void);
 
+// 9600 baud: brgl = 0x82, brgh = 0x06
+// 115200 baud: brgl = 0x8a, brgh = 0x00
+
 void UART2_Initialize(uint8_t brgl,uint8_t brgh)
 {
     // Disable interrupts before changing states

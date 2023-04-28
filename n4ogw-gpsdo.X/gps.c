@@ -19,6 +19,7 @@ extern uint8_t gpsSentence[256];
 extern uint8_t grid[7];
 extern uint8_t nsat[3];
 extern uint8_t gpsCnt;
+extern uint8_t gpsCheckCnt;
 extern uint16_t gridCnt;
 extern const int gridFreq;
 extern screenType screen;
@@ -235,6 +236,10 @@ void sendGps(const uint8_t *data, int len) {
  */
 void gpsRead(void) {
     uint8_t c;
+    static uint8_t checksum = 0;
+    static uint8_t last = 0;
+    uint8_t x,i;
+    
     if (UART2_is_rx_ready()) {
         c = UART2_Read();
         // echo to computer serial port in gps mode
@@ -243,13 +248,41 @@ void gpsRead(void) {
         }
         if (c == 0x24) { // '$'
             gpsCnt = 0;
+            gpsCheckCnt = 0;
+            last = 0;
             return;
         } else if (c == 0x2a) { // '*'
-            // ignore checksum, parse sentence
-            gpsParse();
-        } else {
+            // get ready to read checksum
+            gpsCheckCnt = 1;
+            gpsCnt++;
+            last = gpsCnt;
+        } else { // any other character, put in buffer
             gpsCnt++;
             gpsSentence[gpsCnt] = c;
+            
+            // read checksum bytes and verify checksum
+            if (gpsCheckCnt > 0) {
+                if (gpsCheckCnt == 1) {
+                    if (c < 58) c -= 48; // digit 0-9
+                    else if (c < 71) c-= 55; // hex digit A-F
+                    else c -= 87; // hex digit a-f
+                    checksum = c*16;
+                    gpsCheckCnt ++;
+                } else if (gpsCheckCnt == 2) {
+                    if (c < 58) c -= 48; // digit 0-9
+                    else if (c < 71) c-= 55; // hex digit A-F
+                    else c -= 87; // hex digit a-f
+                    checksum += c;
+                    gpsCheckCnt = 0;
+                                                            
+                    // calculate checksum
+                    x = 0;
+                    for (i = 1;i < last; i++) {
+                        x ^= gpsSentence[i];
+                    }
+                    if (x == checksum) gpsParse();
+                }
+            }
         }
     }
 }
@@ -283,19 +316,25 @@ void gpsParse(void) {
         for (jj = ii; jj < 7; jj++) {
             venusSurveyCnt[jj] = 0x20;
         }
+        // make zero-terminated string
         venusSurveyCnt[7] = 0;
+        
 #ifdef QUANTERR
         // get quantization error
         ii++;
         jj = 0;
-        while ((ii < 256) && (gpsSentence[ii] != 0x2c)) { //','
+        while ((ii < 256) && (gpsSentence[ii] != 0x2c) && (jj < 5)) { //','
             error[jj] = gpsSentence[ii];
             ii++;
             jj++;
         }
+        // make zero-terminated string
         jj++;
         error[jj] = 0;
-        sscanf((char*) error, "%f", &quantErr);
+        if (sscanf((char*) error, "%f", &quantErr) != 1) {
+            // in case sscanf failed
+            quantErr = 0.0;
+        }
 #endif
     }
 #endif  

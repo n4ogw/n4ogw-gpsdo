@@ -4,7 +4,7 @@
  R. Torsten Clay N4OGW
   
  for board version 2
- 04/04/2023
+ 04/22/2023
 
   1. Counts 10 MHz directly using PIC SMT
   2. Divides 10 MHz down to 1 MHz; measures phase difference between 1 MHz and
@@ -197,6 +197,7 @@ uint8_t gpsSentence[256]; // one GPS NMEA line
 uint8_t grid[7]; // 6 character grid square from GPS
 uint8_t nsat[3]; // number of satellites received by GPS
 uint8_t gpsCnt; // counts up to 256 to read one GPS line
+uint8_t gpsCheckCnt; // counter for gps checksum
 uint16_t gridCnt; // counter to periodically update grid 
 const int gridFreq = 3000; // time in seconds to recheck grid square
 
@@ -1273,7 +1274,7 @@ void printHeader1_ToSerial(void) {
 ////////////////////////////////////////////////////////////////////////////////////////////////
 
 void printHeader2_ToSerial(void) {
-    printf("Version 04/04/2023  ID: %d\t", ID_Number);
+    printf("Version 04/22/2023  ID: %d\t", ID_Number);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1299,6 +1300,7 @@ void lcdSetup(void) {
     errStr[1] = 0x2e; // '.'
     gridCnt = 0;
     gpsCnt = 0;
+    gpsCheckCnt = 0;
     screen = home;
     CLCD_Initialize();
     CLCD_SetPos(0, 7);

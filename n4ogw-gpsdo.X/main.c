@@ -4,7 +4,7 @@
  R. Torsten Clay N4OGW
   
  for board version 2
- 04/22/2023
+ 05/20/2023
 
   1. Counts 10 MHz directly using PIC SMT
   2. Divides 10 MHz down to 1 MHz; measures phase difference between 1 MHz and
@@ -192,14 +192,14 @@ const uint8_t nScreen = 5;
 screenType screen;
 uint8_t gpsTime[9]; // latest time from GPS
 char errStr[8]; // displayed frequency error
-uint8_t pwmStr[6]; // displayed pwm setting
+char pwmStr[6]; // displayed pwm setting
 uint8_t gpsSentence[256]; // one GPS NMEA line
 uint8_t grid[7]; // 6 character grid square from GPS
 uint8_t nsat[3]; // number of satellites received by GPS
 uint8_t gpsCnt; // counts up to 256 to read one GPS line
 uint8_t gpsCheckCnt; // counter for gps checksum
 uint16_t gridCnt; // counter to periodically update grid 
-const int gridFreq = 3000; // time in seconds to recheck grid square
+const uint16_t gridFreq = 3000; // time in seconds to recheck grid square
 
 volatile uint8_t button1State; // button 1. 0=not pushed 1=pushed
 volatile uint8_t button2State; // button 2. 0=not pushed 1=pushed
@@ -255,7 +255,7 @@ void main(void) {
  MCC generated function clears the interrupt bit
  */
 void adcInterrupt() {
-    TIC_Value = ADC_GetConversionResult();
+    TIC_Value = (uint16_t)((ADRESH << 8) + ADRESL);
     ADCFlag = true;
 }
 
@@ -652,6 +652,9 @@ void getCommand(void) {
     //process if something is there
     if (UART1_is_rx_ready()) {
         ch = UART1_Read();
+        // reject if not letter or number
+        if (( ch < 48 ) || (ch > 122)) return;
+        
         switch (ch) {
 
             case a: // set damping command
@@ -1146,7 +1149,7 @@ void getCommand(void) {
                 break;
 
             default:
-                printf("No valid command\r\n");
+                printf("Not valid command <%c>\r\n",ch);
                 break;
         };
 
@@ -1274,7 +1277,7 @@ void printHeader1_ToSerial(void) {
 ////////////////////////////////////////////////////////////////////////////////////////////////
 
 void printHeader2_ToSerial(void) {
-    printf("Version 04/22/2023  ID: %d\t", ID_Number);
+    printf("Version 05/20/2023  ID: %d\t", ID_Number);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////

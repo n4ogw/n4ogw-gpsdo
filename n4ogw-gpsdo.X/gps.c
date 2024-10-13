@@ -12,7 +12,7 @@ void gpsRead(void);
 void gpsStartup(void);
 void gpsExtraOff(void);
 void gpsExtraOn(void);
-void sendGps(const uint8_t *data, int len);
+void sendGps(const uint8_t *data, uint8_t len);
 
 extern uint8_t gpsTime[9];
 extern uint8_t gpsSentence[256];
@@ -21,7 +21,7 @@ extern uint8_t nsat[3];
 extern uint8_t gpsCnt;
 extern uint8_t gpsCheckCnt;
 extern uint16_t gridCnt;
-extern const int gridFreq;
+extern const uint16_t gridFreq;
 extern screenType screen;
 extern SerialModes serialMode;
 
@@ -33,7 +33,7 @@ extern float quantErr;
 uint8_t venusMode;
 uint8_t venusSurveyCnt[8];
 uint8_t venusElevMask;
-void sendVenus(const uint8_t *cmd, int len);
+void sendVenus(const uint8_t *cmd, uint8_t len);
 uint8_t readVenusAck(void);
 void setVenusElevMask(uint8_t x);
 #endif
@@ -132,9 +132,9 @@ void setVenusElevMask(uint8_t x) {
 /* 
  * send binary command to Venus GPS 
  */
-void sendVenus(const uint8_t *cmd, int len) {
+void sendVenus(const uint8_t *cmd, uint8_t len) {
     uint8_t data[42];
-    int i,cnt,n;
+    uint8_t i,cnt,n;
     uint8_t checksum;
     
     n = len+7;
@@ -169,13 +169,11 @@ void sendVenus(const uint8_t *cmd, int len) {
  
  */
 uint8_t readVenusAck(void) {
-    int i;
+    uint8_t i;
     uint8_t cs;
     uint8_t dat[5];
     
-    // wait for an ack/nack. May be other data still in
-    // incoming serial buffer since not using interrupt
-    // for uart2 receive
+    // wait for an ack/nack
     do {
         while (!UART2_is_rx_ready()) {
         }
@@ -220,8 +218,8 @@ void gpsExtraOn(void) {
 /* 
 * send a serial command to gps
 */
-void sendGps(const uint8_t *data, int len) {
-    int i;
+void sendGps(const uint8_t *data, uint8_t len) {
+    uint8_t i;
     for (i = 0; i < len; i++) {
         while (!UART2_is_tx_ready()) {
         }
@@ -242,11 +240,19 @@ void gpsRead(void) {
     
     if (UART2_is_rx_ready()) {
         c = UART2_Read();
+        // reject if not letter or number
+        if ((c < 32 ) || (c > 122)) {
+	  gpsCnt = 0;
+	  gpsCheckCnt = 0;
+	  last = 0;
+	  return;
+	}
+        	
         // echo to computer serial port in gps mode
         if (serialMode == gps) {
             UART1_Write(c);
         }
-        if (c == 0x24) { // '$'
+        if (c == 0x24) { // '$' : start of GPS line
             gpsCnt = 0;
             gpsCheckCnt = 0;
             last = 0;
@@ -261,27 +267,25 @@ void gpsRead(void) {
             gpsSentence[gpsCnt] = c;
             
             // read checksum bytes and verify checksum
-            if (gpsCheckCnt > 0) {
-                if (gpsCheckCnt == 1) {
-                    if (c < 58) c -= 48; // digit 0-9
-                    else if (c < 71) c-= 55; // hex digit A-F
-                    else c -= 87; // hex digit a-f
-                    checksum = c*16;
-                    gpsCheckCnt ++;
-                } else if (gpsCheckCnt == 2) {
-                    if (c < 58) c -= 48; // digit 0-9
-                    else if (c < 71) c-= 55; // hex digit A-F
-                    else c -= 87; // hex digit a-f
-                    checksum += c;
-                    gpsCheckCnt = 0;
-                                                            
-                    // calculate checksum
-                    x = 0;
-                    for (i = 1;i < last; i++) {
-                        x ^= gpsSentence[i];
-                    }
-                    if (x == checksum) gpsParse();
-                }
+	    if (gpsCheckCnt == 1) {
+	      if (c < 58) c -= 48; // digit 0-9
+	      else if (c < 71) c-= 55; // hex digit A-F
+	      else c -= 87; // hex digit a-f
+	      checksum = c*16;
+	      gpsCheckCnt ++;
+	    } else if (gpsCheckCnt == 2) {
+	      if (c < 58) c -= 48; // digit 0-9
+	      else if (c < 71) c-= 55; // hex digit A-F
+	      else c -= 87; // hex digit a-f
+	      checksum += c;
+	      gpsCheckCnt = 0;
+              
+	      // calculate checksum
+	      x = 0;
+	      for (i = 1;i < last; i++) {
+		x ^= gpsSentence[i];
+	      }
+	      if (x == checksum) gpsParse();
             }
         }
     }
@@ -294,7 +298,7 @@ void gpsParse(void) {
 
 #ifdef VENUS838T
     // NMEA line for Venus838LPx-T timing mode
-    int ii, jj;
+    uint8_t ii, jj;
     uint8_t error[6];
 
     if (gpsSentence[1] == 0x50 && // 'P'
@@ -307,14 +311,15 @@ void gpsParse(void) {
         // get survey count
         ii = 11;
         jj = 0;
-        while ((gpsSentence[ii] != 0x2c) && (jj < 7) && (ii < 256)) { // 0x2c = ','
+        while ((gpsSentence[ii] != 0x2c) && (jj < 7)) { // 0x2c = ','
             venusSurveyCnt[jj] = gpsSentence[ii];
             ii++;
             jj++;
         }
         // fill rest of string with spaces
-        for (jj = ii; jj < 7; jj++) {
+	while (jj < 7) {
             venusSurveyCnt[jj] = 0x20;
+	    jj++;
         }
         // make zero-terminated string
         venusSurveyCnt[7] = 0;
@@ -323,7 +328,7 @@ void gpsParse(void) {
         // get quantization error
         ii++;
         jj = 0;
-        while ((ii < 256) && (gpsSentence[ii] != 0x2c) && (jj < 5)) { //','
+        while ((gpsSentence[ii] != 0x2c) && (jj < 5)) { //','
             error[jj] = gpsSentence[ii];
             ii++;
             jj++;

@@ -65,9 +65,10 @@ void SYSTEM_Initialize(void)
     CLC6_Initialize();
     CLC3_Initialize();
     UART1_Initialize();
-    UART2_Initialize(0x82, 0x06); // default 9600 baud
-    //      UART2_Initialize(0x06, 0x0d); // default 4800 baud
+    UART2_Initialize(0x82, 0x06); // 9600 baud
+    //      UART2_Initialize(0x06, 0x0d); // 4800 baud
     //      UART2_Initialize(0x17, 0x01);  // 57600 baud  
+    //      UART2_Initialize(0x8c, 0x00); // 115200 baud
     PWM1_16BIT_Initialize();
 }
 

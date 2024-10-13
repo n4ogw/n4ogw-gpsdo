@@ -50,6 +50,22 @@
 #include <xc.h>
 #include "uart2.h"
 
+/**
+  Section: Macro Declarations
+*/
+#define UART2_TX_BUFFER_SIZE 16
+#define UART2_RX_BUFFER_SIZE 16
+
+/**
+  Section: Global Variables
+*/
+
+
+static volatile uint8_t uart2RxHead = 0;
+static volatile uint8_t uart2RxTail = 0;
+static volatile uint8_t uart2RxBuffer[UART2_RX_BUFFER_SIZE];
+static volatile uart2_status_t uart2RxStatusBuffer[UART2_RX_BUFFER_SIZE];
+volatile uint8_t uart2RxCount;
 static volatile uart2_status_t uart2RxLastError;
 
 /**
@@ -69,6 +85,10 @@ void UART2_DefaultErrorHandler(void);
 void UART2_Initialize(uint8_t brgl,uint8_t brgh)
 {
     // Disable interrupts before changing states
+    PIE8bits.U2RXIE = 0;
+    UART2_SetRxInterruptHandler(UART2_Receive_ISR);
+    PIE8bits.U2IE = 0;
+    UART2_SetUartInterruptHandler(UART2_UartInterrupt_ISR);
 
     // Set the UART2 module to the options selected in the user interface.
 
@@ -93,11 +113,11 @@ void UART2_Initialize(uint8_t brgl,uint8_t brgh)
     // BRGS high speed; MODE Asynchronous 8-bit mode; RXEN enabled; TXEN enabled; ABDEN disabled; 
     U2CON0 = 0xB0;
 
-    // RXBIMD Set RXBKIF on rising RX input; BRKOVR disabled; WUE disabled; SENDB disabled; ON enabled; 
-    U2CON1 = 0x80;
+    // RXBIMD Set RXBKIF on rising RX input; BRKOVR disabled; WUE enabled; SENDB disabled; ON enabled; 
+    U2CON1 = 0x90;
 
-    // TXPOL not inverted; FLO off; C0EN Checksum Mode 0; RXPOL not inverted; RUNOVF RX input shifter stops all activity; STP Transmit 1Stop bit, receiver verifies first Stop bit; 
-    U2CON2 = 0x00;
+    // TXPOL not inverted; FLO off; C0EN Checksum Mode 0; RXPOL not inverted; RUNOVF RX input shifter continues; STP Transmit 1Stop bit, receiver verifies first Stop bit; 
+    U2CON2 = 0x80;
 
     // BRGL 130; 
     U2BRGL = brgl; // default 0x82 for 9600 baud
@@ -124,11 +144,19 @@ void UART2_Initialize(uint8_t brgl,uint8_t brgh)
 
     uart2RxLastError.status = 0;
 
+    uart2RxHead = 0;
+    uart2RxTail = 0;
+    uart2RxCount = 0;
+
+    // enable receive interrupt
+    PIE8bits.U2RXIE = 1;
+    // enable uart interrupt
+    PIE8bits.U2IE = 1;
 }
 
 bool UART2_is_rx_ready(void)
 {
-    return (bool)(PIR8bits.U2RXIF);
+    return (uart2RxCount ? true : false);
 }
 
 bool UART2_is_tx_ready(void)
@@ -147,27 +175,24 @@ uart2_status_t UART2_get_last_status(void){
 
 uint8_t UART2_Read(void)
 {
-    while(!PIR8bits.U2RXIF)
+    uint8_t readValue  = 0;
+    
+    while(0 == uart2RxCount)
     {
     }
 
-    uart2RxLastError.status = 0;
+    uart2RxLastError = uart2RxStatusBuffer[uart2RxTail];
 
-    if(U2ERRIRbits.FERIF){
-        uart2RxLastError.ferr = 1;
-        UART2_FramingErrorHandler();
+    readValue = uart2RxBuffer[uart2RxTail++];
+   	if(sizeof(uart2RxBuffer) <= uart2RxTail)
+    {
+        uart2RxTail = 0;
     }
+    PIE8bits.U2RXIE = 0;
+    uart2RxCount--;
+    PIE8bits.U2RXIE = 1;
 
-    if(U2ERRIRbits.RXFOIF){
-        uart2RxLastError.oerr = 1;
-        UART2_OverrunErrorHandler();
-    }
-
-    if(uart2RxLastError.status){
-        UART2_ErrorHandler();
-    }
-
-    return U2RXB;
+    return readValue;
 }
 
 void UART2_Write(uint8_t txData)
@@ -183,11 +208,46 @@ void UART2_Write(uint8_t txData)
 
 
 
+void UART2_Receive_ISR(void)
+{
+    // use this default receive interrupt handler code
+    uart2RxStatusBuffer[uart2RxHead].status = 0;
+
+    if(U2ERRIRbits.FERIF){
+        uart2RxStatusBuffer[uart2RxHead].ferr = 1;
+        UART2_FramingErrorHandler();
+    }
+
+    if(U2ERRIRbits.RXFOIF){
+        uart2RxStatusBuffer[uart2RxHead].oerr = 1;
+        UART2_OverrunErrorHandler();
+    }
+
+    if(uart2RxStatusBuffer[uart2RxHead].status){
+        UART2_ErrorHandler();
+    } else {
+        UART2_RxDataHandler();
+    }
+
+    // or set custom function using UART2_SetRxInterruptHandler()
+}
+
+void UART2_RxDataHandler(void){
+    // use this default receive interrupt handler code
+    uart2RxBuffer[uart2RxHead++] = U2RXB;
+    if(sizeof(uart2RxBuffer) <= uart2RxHead)
+{
+        uart2RxHead = 0;
+    }
+    uart2RxCount++;
+}
+
 void UART2_DefaultFramingErrorHandler(void){}
 
 void UART2_DefaultOverrunErrorHandler(void){}
 
 void UART2_DefaultErrorHandler(void){
+    UART2_RxDataHandler();
 }
 
 void UART2_SetFramingErrorHandler(void (* interruptHandler)(void)){
@@ -203,10 +263,23 @@ void UART2_SetErrorHandler(void (* interruptHandler)(void)){
 }
 
 
+void UART2_UartInterrupt_ISR(void)
+{
+    // WUIF must be cleared by software to clear UxIF
+    U2UIRbits.WUIF = 0;
+
+    // add your UART2 interrupt custom code
+}
+
+void UART2_SetRxInterruptHandler(void (* InterruptHandler)(void)){
+    UART2_RxInterruptHandler = InterruptHandler;
+}
 
 
 
-
+void UART2_SetUartInterruptHandler(void (* InterruptHandler)(void)){
+    UART2_UARTInterruptHandler = InterruptHandler;
+}
 /**
   End of File
 */

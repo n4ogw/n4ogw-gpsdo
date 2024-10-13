@@ -66,9 +66,25 @@ void __interrupt() INTERRUPT_InterruptManager (void)
     {
         SMT1_PW_ACQ_ISR();
     }
+    else if(PIE8bits.U2IE == 1 && PIR8bits.U2IF == 1)
+    {
+        UART2_UARTInterruptHandler();
+    }
+    else if(PIE8bits.U2RXIE == 1 && PIR8bits.U2RXIF == 1)
+    {
+        UART2_RxInterruptHandler();
+    }
     else if(PIE15bits.TMR6IE == 1 && PIR15bits.TMR6IF == 1)
     {
         TMR6_ISR();
+    }
+    else if(PIE4bits.U1IE == 1 && PIR4bits.U1IF == 1)
+    {
+        UART1_UARTInterruptHandler();
+    }
+    else if(PIE4bits.U1RXIE == 1 && PIR4bits.U1RXIF == 1)
+    {
+        UART1_RxInterruptHandler();
     }
     else
     {
